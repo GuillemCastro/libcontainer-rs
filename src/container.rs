@@ -1,4 +1,4 @@
-/**
+/*
  * The MIT License
  * Copyright (c) 2022 Guillem Castro
  *
@@ -21,19 +21,21 @@
  * THE SOFTWARE.
  */
 
-use crate::filesystem::{Filesystem, NullFilesystem};
-use crate::ipc::{self, ConsumerChannel, Action, ProducerChannel, ExecType, Command};
+use crate::filesystem::{StorageDriver, NullDriver};
+use crate::ipc::{self, ConsumerChannel, Action, ProducerChannel};
+use crate::syscall::{self, Command, ExecType};
+use nix::libc::SIGCHLD;
 use nix::sched::{clone, CloneFlags};
-use color_eyre::{Result};
+use color_eyre::{Result, eyre};
 use nix::sys::signal::{kill, Signal};
-use nix::unistd::{Pid, execvpe, fork, ForkResult};
+use nix::sys::wait::waitpid;
+use nix::unistd::Pid;
 use log;
-use std::ffi::{CString};
 
 /// The container struct
 pub struct Container {
     /// Root filesystem of the container
-    fs: Box<dyn Filesystem>,
+    fs: Box<dyn StorageDriver>,
     /// Container's IPC channel
     consumer_channel: ConsumerChannel,
     /// Parent process' IPC channel
@@ -42,22 +44,31 @@ pub struct Container {
     pid: Pid,
     /// Container's PID
     container_pid: Option<Pid>,
-    container_forked_pids: Vec<Pid>
 }
 
 impl Container {
 
-    const STACK_SIZE: usize = 8 * 1024 * 1024; // == 8 MB
+    const STACK_SIZE: usize = 4 * 1024 * 1024; // == 4 MB
 
-    pub fn new() -> Result<Self> {
+    pub fn default() -> Result<Self> {
         let (producer_channel, consumer_channel) = ipc::create_ipc_channels()?;
         Ok(Container {
-            fs: Box::new(NullFilesystem{}),
+            fs: Box::new(NullDriver{}),
             consumer_channel,
             producer_channel,
             pid: Pid::this(),
             container_pid: None,
-            container_forked_pids: Vec::new()
+        })
+    }
+
+    pub fn new(fs: Box<dyn StorageDriver>) -> Result<Self> {
+        let (producer_channel, consumer_channel) = ipc::create_ipc_channels()?;
+        Ok(Container {
+            fs,
+            consumer_channel,
+            producer_channel,
+            pid: Pid::this(),
+            container_pid: None,
         })
     }
 
@@ -71,27 +82,40 @@ impl Container {
             self.container_thread()
         });
 
-        let pid = clone(callback, stack, flags, None)?;
+        let pid = clone(callback, stack, flags, Some(SIGCHLD))?;
         self.container_pid = Some(pid);
         Ok(())
     }
 
-    pub fn stop(&mut self) -> Result<()> {
+    /// Forcefully stop the container
+    /// Warning: This will immediately kill the container and all its processes, data will be lost
+    pub fn force_stop(&mut self) -> Result<()> {
         assert!(self.pid == Pid::this());
-        log::info!("Stopping container");
+        log::info!("Forcefully stopping container");
         self.producer_channel.send(ipc::Message::ACTION(Action::STOP))?;
-        for pid in &self.container_forked_pids {
-            kill(*pid, Signal::SIGTERM)?;
-        }
-        // Send a signal to the container thread to stop it gracefully
+        // Send a signal to the container thread to stop it IMMEDIATELY
         match &self.container_pid {
             Some(pid) => {
-                log::debug!("Sending SIGTERM to container thread");
-                kill(*pid, Signal::SIGTERM)?;
+                log::debug!("Sending SIGKILL to container thread");
+                kill(*pid, Signal::SIGKILL)?;
             }
             None => {},
         }
-        self.fs.umount()?;
+        self.unwind()?;
+        Ok(())
+    }
+
+    /// Wait for the container to finish
+    pub fn wait_for_container(&mut self) -> Result<()> {
+        // Check we call from the parent process
+        assert!(self.pid == Pid::this());
+        let pid = match &self.container_pid {
+            Some(pid) => *pid,
+            None => return Err(eyre::eyre!("Container not started"))
+        };
+        log::debug!("Waiting for container to finish with PID {}", pid);
+        waitpid(pid, None)?;
+        self.unwind()?;
         Ok(())
     }
 
@@ -107,52 +131,31 @@ impl Container {
             command,
             args,
             env: env.unwrap_or(vec![]),
-            exec_type: exec_type.unwrap_or(ExecType::FORK)
+            exec_type: exec_type.unwrap_or(ExecType::REPLACE)
         };
         log::debug!("Executing command inside container {:?}", command);
         self.producer_channel.send(ipc::Message::COMMAND(command))
     }
 
+    fn unwind(&mut self) -> Result<()> {
+        self.fs.umount()
+    }
+
     fn container_thread(&mut self) -> isize {
+        let rootfs = self.fs.root().unwrap();
+        syscall::switch_rootfs(&rootfs).unwrap();
         loop {
-            match self.consumer_channel.receive().unwrap() {
+            let msg = self.consumer_channel.receive().unwrap();
+            log::debug!("Received message: {:?}", msg);
+            match msg {
                 ipc::Message::ACTION(Action::STOP) => break,
-                ipc::Message::COMMAND(command) => self.exec(command).unwrap(),
+                ipc::Message::COMMAND(command) => {
+                    syscall::exec(command).unwrap();
+                }
             }
         }
         log::info!("Container thread stopped");
         0
-    }
-
-    fn exec(&mut self, command: Command) -> Result<()> {
-        let filename: CString = CString::new(command.command).unwrap();
-        let args = &command.args.iter()
-            .map(|s| CString::new(s.clone()).unwrap())
-            .collect::<Vec<CString>>();
-        let env = &command.env.iter()
-            .map(|s| CString::new(s.clone()).unwrap())
-            .collect::<Vec<CString>>();
-        match command.exec_type {
-            ExecType::FORK => {
-                // Forking is unsafe ¯\_(ツ)_/¯
-                unsafe {
-                    let fork_result = fork()?;
-                    match fork_result {
-                        ForkResult::Parent { child } => self.container_forked_pids.push(child),
-                        ForkResult::Child => {
-                            execvpe(&filename, &args, &env)?;
-                            log::error!("Failed to execute command");
-                        },
-                    }
-                }
-            },
-            ExecType::REPLACE => {
-                execvpe(&filename, &args, &env)?;
-                // On success current process is replaced by the new one
-                log::error!("Failed to execute command");
-            }
-        }
-        Ok(())
     }
 
     fn clone_flags() -> CloneFlags {
