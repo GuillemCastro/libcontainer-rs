@@ -1,4 +1,4 @@
-/**
+/*
  * The MIT License
  * Copyright (c) 2022 Guillem Castro
  *
@@ -26,19 +26,25 @@ use std::path::{PathBuf, Path};
 use std::fs;
 use sys_mount::{Mount, FilesystemType, MountFlags, Unmount, UnmountFlags};
 
-pub trait Filesystem {
+pub trait StorageDriver {
 
+    /// Mounts the filesystem
     fn mount(&mut self) -> Result<()>;
 
+    /// Unmounts the filesystem
     fn umount(&mut self) -> Result<()>;
+
+    /// Returns the path where the filesystem is mounted (inside the parent mount)
+    /// e.g. /mnt/my-container/my-fs
+    fn root(&self) -> Result<&Path>;
     
 }
 
-pub struct NullFilesystem {
+pub struct NullDriver {
 
 }
 
-impl Filesystem for NullFilesystem {
+impl StorageDriver for NullDriver {
 
     /// Mount the filesystem that will be used by the container
     fn mount(&mut self) -> Result<()> {
@@ -50,29 +56,29 @@ impl Filesystem for NullFilesystem {
         todo!()
     }
 
+    /// Return the root path of the filesystem
+    fn root(&self) -> Result<&Path> {
+        todo!()
+    }
+
 }
 
-pub struct OverlayFilesystem {
+/// An overlayfs filesystem driver
+/// Note: 
+pub struct OverlayDriver {
     imagepath: PathBuf,
     targetpath: PathBuf,
     mount: Option<Mount>
 }
 
-impl OverlayFilesystem {
+impl OverlayDriver {
 
     const MERGE_DIR: &'static str = "merge";
     const UPPER_DIR: &'static str = "upper";
     const WORK_DIR: &'static str = "workdir";
 
-    pub fn new(image: &impl AsRef<Path>, target: &impl AsRef<Path>) -> OverlayFilesystem {
-        // Overlayfs was introduced in kernel version 3.18
-        // match is_kernel_version_compatible("3.18.0") {
-        //     Ok(true) => {} // The Kernel version is compatible
-        //     _ => { // It might not be compatible, but anyways we can try so just log a warning
-        //         warn!("Your kernel version might not be compatible with devenv. Use version 3.18 or greater for better compatibility");
-        //     }
-        // }
-        return OverlayFilesystem {
+    pub fn new(image: &impl AsRef<Path>, target: &impl AsRef<Path>) -> Self {
+        return OverlayDriver {
             imagepath: image.as_ref().to_path_buf(),
             targetpath:  target.as_ref().to_path_buf(),
             mount: None
@@ -81,7 +87,7 @@ impl OverlayFilesystem {
 
 }
 
-impl Filesystem for OverlayFilesystem {
+impl StorageDriver for OverlayDriver {
 
     /// Mount an overlayfs that will be used as the filesystem for the container.
     /// 
@@ -114,15 +120,16 @@ impl Filesystem for OverlayFilesystem {
         }
         fs::create_dir(&self.targetpath)?;
         // Before mounting, create the Overlay directories
-        fs::create_dir(self.targetpath.join(OverlayFilesystem::MERGE_DIR))?;
-        fs::create_dir(self.targetpath.join(OverlayFilesystem::UPPER_DIR))?;
-        fs::create_dir(self.targetpath.join(OverlayFilesystem::WORK_DIR))?;
+        fs::create_dir(self.targetpath.join(OverlayDriver::MERGE_DIR))?;
+        fs::create_dir(self.targetpath.join(OverlayDriver::UPPER_DIR))?;
+        fs::create_dir(self.targetpath.join(OverlayDriver::WORK_DIR))?;
         let data = format!("lowerdir={},upperdir={},workdir={}", 
             self.imagepath.display(),  // lowerdir=image
-            self.targetpath.join(OverlayFilesystem::UPPER_DIR).display(), // upperdir=upper
-            self.targetpath.join(OverlayFilesystem::WORK_DIR).display() // workdir=work
+            self.targetpath.join(OverlayDriver::UPPER_DIR).display(), // upperdir=upper
+            self.targetpath.join(OverlayDriver::WORK_DIR).display() // workdir=work
         );
-        let target = self.targetpath.join(OverlayFilesystem::MERGE_DIR); 
+        println!("{}", data);
+        let target = self.targetpath.join(OverlayDriver::MERGE_DIR); 
         let mount = Mount::new(
             "none", 
             target, 
@@ -143,8 +150,15 @@ impl Filesystem for OverlayFilesystem {
         Ok(())
     }
 
-}
+    /// Return the root path of the filesystem
+    fn root(&self) -> Result<&Path> {
+        match self.mount {
+            Some(ref mount) => Ok(mount.target_path()),
+            None => Err(eyre::eyre!("Filesystem is not mounted"))
+        }
+    }
 
+}
 mod tests {
     use super::*;
     use std::path::PathBuf;
@@ -155,11 +169,11 @@ mod tests {
     fn test_overlay_filesystem_mount() {
         let image = PathBuf::from("/tmp");
         let target = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("tests/test_target");
-        let mut fs = OverlayFilesystem::new(&image, &target);
+        let mut fs = OverlayDriver::new(&image, &target);
         fs.mount().unwrap();
-        assert!(target.join(OverlayFilesystem::MERGE_DIR).exists());
-        assert!(target.join(OverlayFilesystem::UPPER_DIR).exists());
-        assert!(target.join(OverlayFilesystem::WORK_DIR).exists());
+        assert!(target.join(OverlayDriver::MERGE_DIR).exists());
+        assert!(target.join(OverlayDriver::UPPER_DIR).exists());
+        assert!(target.join(OverlayDriver::WORK_DIR).exists());
         fs.umount().unwrap();
         fs::remove_dir_all(target);
     }
