@@ -1,4 +1,4 @@
-/**
+/*
  * The MIT License
  * Copyright (c) 2022 Guillem Castro
  *
@@ -27,6 +27,9 @@ pub mod container;
 pub mod filesystem;
 /// IPC for communication between the container and the host
 pub mod ipc;
+
+/// Syscalls used by the container
+pub mod syscall;
 
 #[cfg(test)]
 mod tests {

@@ -23,7 +23,9 @@
 
 use color_eyre::{Result, eyre};
 use ipc_channel::{self, ipc::{IpcSender, IpcReceiver}};
-use serde::{Serialize, Deserialize}; 
+use serde::{Serialize, Deserialize};
+
+use crate::syscall::Command; 
 
 /// Creates the IPC channel pairs (producer, consumer)
 /// # Returns
@@ -31,28 +33,6 @@ use serde::{Serialize, Deserialize};
 pub fn create_ipc_channels() -> Result<(ProducerChannel, ConsumerChannel)> {
     let (inner_sender, inner_receiver) = ipc_channel::ipc::channel::<Message>()?;
     Ok((ProducerChannel{inner_sender}, ConsumerChannel{inner_receiver}))
-}
-
-/// Execution type for a new process inside the container
-#[derive(Debug, Serialize, Deserialize)]
-pub enum ExecType {
-    /// Execute a new process as a child of the container
-    FORK,
-    /// Replace the container process with a new one. New process will have PID 0
-    REPLACE
-}
-
-/// A command represents a process to be executed inside the container
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Command {
-    /// Filename or path to the executable
-    pub command: String,
-    /// Arguments to pass to the new process
-    pub args: Vec<String>,
-    /// Environment variables to set
-    pub env: Vec<String>,
-    /// Execution type for the new process
-    pub exec_type: ExecType
 }
 
 /// Actions that can be performed by the container
