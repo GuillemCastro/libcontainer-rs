@@ -10,5 +10,9 @@ exclude = ["./tests/*"]
 color-eyre = "0.6"
 sys-mount = "1"
 nix = "0.23.1"
-crossbeam = "0.8"
+ipc-channel = "0.15"
 log = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+simple_logger = "2.1"

@@ -1,4 +1,4 @@
-/**
+/*
  * The MIT License
  * Copyright (c) 2022 Guillem Castro
  *
@@ -21,19 +21,20 @@
  * THE SOFTWARE.
  */
 
-use color_eyre::Result;
-use crossbeam::channel::{Sender, Receiver};
+use color_eyre::{Result, eyre};
+use ipc_channel::{self, ipc::{IpcSender, IpcReceiver}};
+use serde::{Serialize, Deserialize}; 
 
 /// Creates the IPC channel pairs (producer, consumer)
 /// # Returns
 /// A tuple containing the producer and consumer channels
 pub fn create_ipc_channels() -> Result<(ProducerChannel, ConsumerChannel)> {
-    let (inner_sender, inner_receiver) = crossbeam::channel::unbounded();
+    let (inner_sender, inner_receiver) = ipc_channel::ipc::channel::<Message>()?;
     Ok((ProducerChannel{inner_sender}, ConsumerChannel{inner_receiver}))
 }
 
 /// Execution type for a new process inside the container
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum ExecType {
     /// Execute a new process as a child of the container
     FORK,
@@ -42,7 +43,7 @@ pub enum ExecType {
 }
 
 /// A command represents a process to be executed inside the container
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Command {
     /// Filename or path to the executable
     pub command: String,
@@ -55,11 +56,13 @@ pub struct Command {
 }
 
 /// Actions that can be performed by the container
+#[derive(Debug, Serialize, Deserialize)]
 pub enum Action {
     STOP
 }
 
 /// A message to be sent to the container
+#[derive(Debug, Serialize, Deserialize)]
 pub enum Message {
     /// Action to be performed by the container
     ACTION(Action),
@@ -69,7 +72,7 @@ pub enum Message {
 
 /// The channel to be used by processes outside the container
 pub struct ProducerChannel {
-    inner_sender: Sender<Message>
+    inner_sender: IpcSender<Message>
 }
 
 impl ProducerChannel {
@@ -78,6 +81,7 @@ impl ProducerChannel {
     /// # Arguments
     /// * `message` - Message to be sent
     pub fn send(&self, msg: Message) -> Result<()> {
+        log::debug!("Sending message: {:?}", msg);
         self.inner_sender.send(msg)?;
         Ok(())
     }
@@ -85,7 +89,7 @@ impl ProducerChannel {
 
 /// The channel to be used by processes inside the container
 pub struct ConsumerChannel {
-    inner_receiver: Receiver<Message>
+    inner_receiver: IpcReceiver<Message>
 }
 
 impl ConsumerChannel {
@@ -94,7 +98,6 @@ impl ConsumerChannel {
     /// # Returns
     /// The message received
     pub fn receive(&self) -> Result<Message> {
-        self.inner_receiver.recv()
-            .map_err(|e| color_eyre::eyre::eyre!(e))
+        self.inner_receiver.recv().map_err(|_| eyre::eyre!("Error receiving message"))
     }
 }
