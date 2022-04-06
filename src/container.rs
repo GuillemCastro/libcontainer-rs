@@ -21,7 +21,7 @@
  * THE SOFTWARE.
  */
 
-use crate::filesystem::{StorageDriver, NullDriver};
+use crate::filesystem::{StorageDriver, NullDriver, self};
 use crate::ipc::{self, ConsumerChannel, Action, ProducerChannel};
 use crate::syscall::{self, Command, ExecType};
 use nix::libc::SIGCHLD;
@@ -144,6 +144,7 @@ impl Container {
     fn container_thread(&mut self) -> isize {
         let rootfs = self.fs.root().unwrap();
         syscall::switch_rootfs(&rootfs).unwrap();
+        filesystem::mount_procfs().unwrap();
         loop {
             let msg = self.consumer_channel.receive().unwrap();
             log::debug!("Received message: {:?}", msg);

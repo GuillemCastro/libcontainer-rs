@@ -159,6 +159,18 @@ impl StorageDriver for OverlayDriver {
     }
 
 }
+
+pub fn mount_procfs() -> Result<()> {
+   Mount::new(
+        "proc",
+        "/proc",
+        FilesystemType::from("proc"),
+        MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
+        None
+    )?;
+    Ok(())
+}
+
 mod tests {
     use super::*;
     use std::path::PathBuf;
