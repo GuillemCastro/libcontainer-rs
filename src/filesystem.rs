@@ -22,8 +22,10 @@
  */
 
 use color_eyre::eyre::{Result, self};
+use nix::libc;
+use nix::sys::stat::{mknod, SFlag, Mode, makedev};
 use std::path::{PathBuf, Path};
-use std::fs;
+use std::{fs, os};
 use sys_mount::{Mount, FilesystemType, MountFlags, Unmount, UnmountFlags};
 
 pub trait StorageDriver {
@@ -168,6 +170,52 @@ pub fn mount_procfs() -> Result<()> {
         MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
         None
     )?;
+    Ok(())
+}
+
+pub fn create_dev_devices() -> Result<()> {
+    // Create some special devices
+    mknod("/dev/null", SFlag::S_IFCHR, Mode::S_IRGRP, makedev(1, 3))?;
+    mknod("/dev/zero", SFlag::S_IFCHR, Mode::S_IRGRP, makedev(1, 5))?;
+    mknod("/dev/full", SFlag::S_IFCHR, Mode::S_IRGRP, makedev(1, 7))?;
+    mknod("/dev/random", SFlag::S_IFCHR, Mode::S_IRGRP, makedev(1, 8))?;
+    mknod("/dev/urandom", SFlag::S_IFCHR, Mode::S_IRGRP, makedev(1, 9))?;
+    mknod("/dev/tty", SFlag::S_IFCHR, Mode::S_IRUSR, makedev(5, 0))?;
+    mknod("/dev/console", SFlag::S_IFCHR, Mode::S_IRUSR, makedev(5, 1))?;
+    // Create stdin, stdout and stderr
+    os::unix::fs::symlink(
+        "/proc/self/fd/0",
+        "/dev/stdin"
+    )?;
+    os::unix::fs::symlink(
+        "/proc/self/fd/1",
+        "/dev/stdout"
+    )?;
+    os::unix::fs::symlink(
+        "/proc/self/fd/2",
+        "/dev/stderr"
+    )?;
+    // Crete /dev/core
+    os::unix::fs::symlink(
+        "/proc/kcore",
+        "/dev/core"
+    )?;
+    // Create /dev/fd
+    os::unix::fs::symlink(
+        "/proc/self/fd",
+        "/dev/fd"
+    )?;
+    // Create /dev/mqueue
+    fs::create_dir("/dev/mqueue")?;
+    // Create /dev/pts
+    fs::create_dir("/dev/pts")?;
+    mknod("/dev/pts/ptmx", SFlag::S_IFCHR, Mode::S_IRUSR | Mode::S_IWUSR, makedev(5, 2))?;
+    os::unix::fs::symlink(
+        "/dev/pts/ptmx",
+        "/dev/ptmx"
+    )?;
+    // Create /dev/shm
+    fs::create_dir("/dev/shm")?;
     Ok(())
 }
 
