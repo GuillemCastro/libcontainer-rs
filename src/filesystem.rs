@@ -173,6 +173,29 @@ pub fn mount_procfs() -> Result<()> {
     Ok(())
 }
 
+pub fn mount_sysfs() -> Result<()> {
+    Mount::new(
+        "sysfs",
+        "/sys",
+        FilesystemType::from("sysfs"),
+        MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
+        None
+    )?;
+    Ok(())
+}
+
+pub fn mount_devfs() -> Result<()> {
+    Mount::new(
+        "tmpfs",
+        "/dev",
+        FilesystemType::from("tmpfs"),
+        MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
+        None
+    )?;
+    create_dev_devices()?;
+    Ok(())
+}
+
 pub fn create_dev_devices() -> Result<()> {
     // Create some special devices
     mknod("/dev/null", SFlag::S_IFCHR, Mode::S_IRGRP, makedev(1, 3))?;
@@ -207,15 +230,37 @@ pub fn create_dev_devices() -> Result<()> {
     )?;
     // Create /dev/mqueue
     fs::create_dir("/dev/mqueue")?;
+    Mount::new(
+        "mqueue",
+        "/dev/mqueue",
+        FilesystemType::from("mqueue"),
+        MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
+        None
+    )?;
     // Create /dev/pts
-    fs::create_dir("/dev/pts")?;
-    mknod("/dev/pts/ptmx", SFlag::S_IFCHR, Mode::S_IRUSR | Mode::S_IWUSR, makedev(5, 2))?;
+    fs::create_dir("/dev/pts")?;    
+    // Mount /dev/pts
+    Mount::new(
+        "devpts",
+        "/dev/pts",
+        FilesystemType::from("devpts"),
+        MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
+        Some("newinstance,ptmxmode=0666,mode=0620")
+    )?;
     os::unix::fs::symlink(
         "/dev/pts/ptmx",
         "/dev/ptmx"
     )?;
     // Create /dev/shm
     fs::create_dir("/dev/shm")?;
+    // Mount /dev/shm
+    Mount::new(
+        "shm",
+        "/dev/shm",
+        FilesystemType::from("tmpfs"),
+        MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
+        Some("mode=1777,size=65536k")
+    )?;
     Ok(())
 }
 

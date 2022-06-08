@@ -145,7 +145,8 @@ impl Container {
         let rootfs = self.fs.root().unwrap();
         syscall::switch_rootfs(&rootfs).unwrap();
         filesystem::mount_procfs().unwrap();
-        filesystem::create_dev_devices().unwrap();
+        filesystem::mount_sysfs().unwrap();
+        filesystem::mount_devfs().unwrap();
         loop {
             let msg = self.consumer_channel.receive().unwrap();
             log::debug!("Received message: {:?}", msg);
