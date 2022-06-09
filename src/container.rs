@@ -74,7 +74,6 @@ impl Container {
 
     pub fn start(&mut self) -> Result<()> {
         log::info!("Starting container");
-        self.fs.mount()?;
 
         let ref mut stack: [u8; Container::STACK_SIZE] = [0; Container::STACK_SIZE];
         let flags = Container::clone_flags();
@@ -142,6 +141,7 @@ impl Container {
     }
 
     fn container_thread(&mut self) -> isize {
+        self.fs.mount().unwrap();
         let rootfs = self.fs.root().unwrap();
         syscall::switch_rootfs(&rootfs).unwrap();
         filesystem::mount_procfs().unwrap();

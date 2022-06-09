@@ -22,7 +22,6 @@
  */
 
 use color_eyre::eyre::{Result, self};
-use nix::libc;
 use nix::sys::stat::{mknod, SFlag, Mode, makedev};
 use std::path::{PathBuf, Path};
 use std::{fs, os};
@@ -39,7 +38,7 @@ pub trait StorageDriver {
     /// Returns the path where the filesystem is mounted (inside the parent mount)
     /// e.g. /mnt/my-container/my-fs
     fn root(&self) -> Result<&Path>;
-    
+
 }
 
 pub struct NullDriver {
@@ -130,13 +129,12 @@ impl StorageDriver for OverlayDriver {
             self.targetpath.join(OverlayDriver::UPPER_DIR).display(), // upperdir=upper
             self.targetpath.join(OverlayDriver::WORK_DIR).display() // workdir=work
         );
-        println!("{}", data);
         let target = self.targetpath.join(OverlayDriver::MERGE_DIR); 
         let mount = Mount::new(
             "none", 
             target, 
             FilesystemType::from("overlay"), 
-            MountFlags::NOSUID, 
+            MountFlags::NOSUID,
             Some(data.as_str())
         )?;
         self.mount = Some(mount);
