@@ -137,6 +137,7 @@ impl Container {
     }
 
     fn unwind(&mut self) -> Result<()> {
+        log::debug!("Unwinding container");
         self.fs.umount()
     }
 

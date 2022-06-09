@@ -22,6 +22,7 @@
  */
 
 use color_eyre::eyre::{Result, self};
+use nix::mount::{umount2, MntFlags};
 use nix::sys::stat::{mknod, SFlag, Mode, makedev};
 use std::path::{PathBuf, Path};
 use std::{fs, os};
@@ -67,8 +68,8 @@ impl StorageDriver for NullDriver {
 /// An overlayfs filesystem driver
 /// Note: 
 pub struct OverlayDriver {
-    imagepath: PathBuf,
-    targetpath: PathBuf,
+    layers: Vec<PathBuf>,
+    target: PathBuf,
     mount: Option<Mount>
 }
 
@@ -78,10 +79,12 @@ impl OverlayDriver {
     const UPPER_DIR: &'static str = "upper";
     const WORK_DIR: &'static str = "workdir";
 
-    pub fn new(image: &impl AsRef<Path>, target: &impl AsRef<Path>) -> Self {
+    pub fn new(layers: Vec<&impl AsRef<Path>>, target: &impl AsRef<Path>) -> Self {
         return OverlayDriver {
-            imagepath: image.as_ref().to_path_buf(),
-            targetpath:  target.as_ref().to_path_buf(),
+            layers: layers.iter().map(
+                |layer| layer.as_ref().to_path_buf()
+            ).collect(),
+            target:  target.as_ref().to_path_buf(),
             mount: None
         };
     }
@@ -115,24 +118,32 @@ impl StorageDriver for OverlayDriver {
     /// are stored in memory, and changes are lost when rebooting.
     /// 
     fn mount(&mut self) -> Result<()> {
-        if self.targetpath.exists() {
-            let path = self.targetpath.display();
-            return Err(eyre::eyre!("Target path {path} already exists"));
+        if !&self.target.exists() {
+            fs::create_dir(&self.target)?;
         }
-        fs::create_dir(&self.targetpath)?;
         // Before mounting, create the Overlay directories
-        fs::create_dir(self.targetpath.join(OverlayDriver::MERGE_DIR))?;
-        fs::create_dir(self.targetpath.join(OverlayDriver::UPPER_DIR))?;
-        fs::create_dir(self.targetpath.join(OverlayDriver::WORK_DIR))?;
+        let mergedir = self.target.join(Self::MERGE_DIR);
+        let upperdir = self.target.join(Self::UPPER_DIR);
+        let workdir = self.target.join(Self::WORK_DIR);
+        if !&mergedir.exists() {
+            fs::create_dir(&mergedir)?;
+        }
+        if !&upperdir.exists() {
+            fs::create_dir(&upperdir)?;
+        }
+        if !&workdir.exists() {
+            fs::create_dir(&workdir)?;
+        }
         let data = format!("lowerdir={},upperdir={},workdir={}", 
-            self.imagepath.display(),  // lowerdir=image
-            self.targetpath.join(OverlayDriver::UPPER_DIR).display(), // upperdir=upper
-            self.targetpath.join(OverlayDriver::WORK_DIR).display() // workdir=work
+            self.layers.iter().map(
+                |layer| layer.display().to_string()
+            ).collect::<Vec<String>>().join(":"),  // lowerdir=layer1:layer2:...
+            upperdir.display(), // upperdir=upper
+            workdir.display() // workdir=work
         );
-        let target = self.targetpath.join(OverlayDriver::MERGE_DIR); 
         let mount = Mount::new(
             "none", 
-            target, 
+            mergedir,
             FilesystemType::from("overlay"), 
             MountFlags::NOSUID,
             Some(data.as_str())
@@ -144,9 +155,12 @@ impl StorageDriver for OverlayDriver {
     /// Unmount the overlayfs that was used by the container
     fn umount(&mut self) -> Result<()> {
         if let Some(mount) = self.mount.take() {
-            mount.unmount(UnmountFlags::DETACH)?;
+            mount.unmount(UnmountFlags::FORCE)?;
         }
-        fs::remove_dir_all(&self.targetpath)?;
+        else {
+            let mergedir = self.target.join(Self::MERGE_DIR);
+            umount2(&mergedir, MntFlags::MNT_FORCE)?;
+        }
         Ok(())
     }
 
@@ -272,7 +286,7 @@ mod tests {
     fn test_overlay_filesystem_mount() {
         let image = PathBuf::from("/tmp");
         let target = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("tests/test_target");
-        let mut fs = OverlayDriver::new(&image, &target);
+        let mut fs = OverlayDriver::new(vec![&image], &target);
         fs.mount().unwrap();
         assert!(target.join(OverlayDriver::MERGE_DIR).exists());
         assert!(target.join(OverlayDriver::UPPER_DIR).exists());
