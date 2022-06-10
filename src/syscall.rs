@@ -33,13 +33,6 @@ use serde::{Serialize, Deserialize};
 /// * `new_root` - The path to the new rootfs
 pub fn switch_rootfs(new_root: &Path) -> Result<()> {
     mount(
-        None::<&str>,
-        "/",
-        None::<&str>,
-        MsFlags::MS_PRIVATE | MsFlags::MS_REC,
-        None::<&str>,
-    )?;
-    mount(
         Some(new_root),
         new_root,
         None::<&str>,

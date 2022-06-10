@@ -22,7 +22,7 @@
  */
 
 use color_eyre::eyre::{Result, self};
-use nix::mount::{umount2, MntFlags};
+use nix::mount::{umount2, MntFlags, mount, MsFlags};
 use nix::sys::stat::{mknod, SFlag, Mode, makedev};
 use std::path::{PathBuf, Path};
 use std::{fs, os};
@@ -142,7 +142,7 @@ impl StorageDriver for OverlayDriver {
             workdir.display() // workdir=work
         );
         let mount = Mount::new(
-            "none", 
+            "overlay", 
             mergedir,
             FilesystemType::from("overlay"), 
             MountFlags::NOSUID,
@@ -154,12 +154,14 @@ impl StorageDriver for OverlayDriver {
 
     /// Unmount the overlayfs that was used by the container
     fn umount(&mut self) -> Result<()> {
+        // If the container is umounted from the host, this will fail.
         if let Some(mount) = self.mount.take() {
-            mount.unmount(UnmountFlags::FORCE)?;
+            mount.unmount(UnmountFlags::DETACH)?;
         }
+        // When calling from the host, instead we have to use the umount2 syscall
         else {
             let mergedir = self.target.join(Self::MERGE_DIR);
-            umount2(&mergedir, MntFlags::MNT_FORCE)?;
+            umount2(&mergedir, MntFlags::MNT_DETACH)?;
         }
         Ok(())
     }
@@ -172,6 +174,17 @@ impl StorageDriver for OverlayDriver {
         }
     }
 
+}
+
+pub fn mount_rootfs_private() -> Result<()> {
+    mount(
+        None::<&str>,
+        "/",
+        None::<&str>,
+        MsFlags::MS_PRIVATE | MsFlags::MS_REC,
+        None::<&str>,
+    )?;
+    Ok(())
 }
 
 pub fn mount_procfs() -> Result<()> {

@@ -100,7 +100,6 @@ impl Container {
             }
             None => {},
         }
-        self.unwind()?;
         Ok(())
     }
 
@@ -114,7 +113,6 @@ impl Container {
         };
         log::debug!("Waiting for container to finish with PID {}", pid);
         waitpid(pid, None)?;
-        self.unwind()?;
         Ok(())
     }
 
@@ -136,15 +134,13 @@ impl Container {
         self.producer_channel.send(ipc::Message::COMMAND(command))
     }
 
-    fn unwind(&mut self) -> Result<()> {
-        log::debug!("Unwinding container");
-        self.fs.umount()
-    }
-
     fn container_thread(&mut self) -> isize {
+        // Mount first the rootfs as private so the host can't access it
+        filesystem::mount_rootfs_private().unwrap();
         self.fs.mount().unwrap();
         let rootfs = self.fs.root().unwrap();
         syscall::switch_rootfs(&rootfs).unwrap();
+        // Create /dev, /sys, /proc, ...
         filesystem::mount_procfs().unwrap();
         filesystem::mount_sysfs().unwrap();
         filesystem::mount_devfs().unwrap();
