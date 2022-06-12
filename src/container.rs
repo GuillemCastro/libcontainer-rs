@@ -21,11 +21,11 @@
  * THE SOFTWARE.
  */
 
-use crate::filesystem::{StorageDriver, NullDriver, self};
-use crate::ipc::{self, ConsumerChannel, Action, ProducerChannel};
+use crate::filesystem::{StorageDriver, NullDriver};
+use crate::ipc::{self, Action, ProducerChannel};
+use crate::runtime::Runtime;
 use crate::syscall::{self, Command, ExecType};
-use nix::libc::SIGCHLD;
-use nix::sched::{clone, CloneFlags};
+use crate::random;
 use color_eyre::{Result, eyre};
 use nix::sys::signal::{kill, Signal};
 use nix::sys::wait::waitpid;
@@ -34,54 +34,47 @@ use log;
 
 /// The container struct
 pub struct Container {
-    /// Root filesystem of the container
-    fs: Box<dyn StorageDriver>,
-    /// Container's IPC channel
-    consumer_channel: ConsumerChannel,
     /// Parent process' IPC channel
     producer_channel: ProducerChannel,
     /// Parent process' PID
     pid: Pid,
     /// Container's PID
     container_pid: Option<Pid>,
+    /// The runtime execution environment for the container
+    runtime: Runtime,
 }
 
 impl Container {
 
-    const STACK_SIZE: usize = 4 * 1024 * 1024; // == 4 MB
-
     pub fn default() -> Result<Self> {
-        let (producer_channel, consumer_channel) = ipc::create_ipc_channels()?;
-        Ok(Container {
-            fs: Box::new(NullDriver{}),
-            consumer_channel,
-            producer_channel,
-            pid: Pid::this(),
-            container_pid: None,
-        })
+        Ok(
+            Container::new(Box::new(NullDriver{}))?
+        )
     }
 
     pub fn new(fs: Box<dyn StorageDriver>) -> Result<Self> {
         let (producer_channel, consumer_channel) = ipc::create_ipc_channels()?;
+        let id = random::generate_random_128_id();
+        let runtime = Runtime::new(id, fs, consumer_channel);
         Ok(Container {
-            fs,
-            consumer_channel,
             producer_channel,
             pid: Pid::this(),
             container_pid: None,
+            runtime,
         })
     }
 
     pub fn start(&mut self) -> Result<()> {
         log::info!("Starting container");
-
-        let ref mut stack: [u8; Container::STACK_SIZE] = [0; Container::STACK_SIZE];
-        let flags = Container::clone_flags();
-        let callback = Box::new(|| {
-            self.container_thread()
+        let callback: Box<dyn FnMut() -> isize> = Box::new(|| {
+            let res = self.runtime.run();
+            if let Err(err) = res {
+                log::error!("Container runtime error: {}", err);
+                return -1;
+            }
+            0
         });
-
-        let pid = clone(callback, stack, flags, Some(SIGCHLD))?;
+        let pid = syscall::create_container(callback)?;
         self.container_pid = Some(pid);
         Ok(())
     }
@@ -132,34 +125,6 @@ impl Container {
         };
         log::debug!("Executing command inside container {:?}", command);
         self.producer_channel.send(ipc::Message::COMMAND(command))
-    }
-
-    fn container_thread(&mut self) -> isize {
-        // Mount first the rootfs as private so the host can't access it
-        filesystem::mount_rootfs_private().unwrap();
-        self.fs.mount().unwrap();
-        let rootfs = self.fs.root().unwrap();
-        syscall::switch_rootfs(&rootfs).unwrap();
-        // Create /dev, /sys, /proc, ...
-        filesystem::mount_procfs().unwrap();
-        filesystem::mount_sysfs().unwrap();
-        filesystem::mount_devfs().unwrap();
-        loop {
-            let msg = self.consumer_channel.receive().unwrap();
-            log::debug!("Received message: {:?}", msg);
-            match msg {
-                ipc::Message::ACTION(Action::STOP) => break,
-                ipc::Message::COMMAND(command) => {
-                    syscall::exec(command).unwrap();
-                }
-            }
-        }
-        log::info!("Container thread stopped");
-        0
-    }
-
-    fn clone_flags() -> CloneFlags {
-        CloneFlags::CLONE_NEWNS | CloneFlags::CLONE_NEWUTS | CloneFlags::CLONE_NEWIPC | CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWNET
     }
 
 }

@@ -21,19 +21,10 @@
  * THE SOFTWARE.
  */
 
-/// Public API for building a container
-pub mod container;
-/// Filesystem drivers and utilities
-pub mod filesystem;
-/// IPC for communication between the container and the host
-pub mod ipc;
-/// Syscalls used by the container
-pub mod syscall;
+use rand::Rng;
 
-mod random;
-mod runtime;
-
-#[cfg(test)]
-mod tests {
-
+pub fn generate_random_128_id() -> String {
+    let mut rng = rand::thread_rng();
+    let rand_int: i128 = rng.gen();
+    format!("{:x}", rand_int)
 }

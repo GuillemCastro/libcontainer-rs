@@ -24,8 +24,10 @@
 use std::ffi::CString;
 use std::path::Path;
 use color_eyre::{Result, eyre};
+use nix::libc::SIGCHLD;
 use nix::mount::{MsFlags, MntFlags, mount, umount2};
-use nix::unistd::{pivot_root, chdir, fork, execvpe, ForkResult};
+use nix::sched::{clone, CloneFlags};
+use nix::unistd::{pivot_root, chdir, fork, execvpe, ForkResult, Pid};
 use serde::{Serialize, Deserialize};
 
 /// Switches the current rootfs to `new_root`
@@ -119,4 +121,16 @@ pub fn exec(command: Command) -> Result<i32> {
         }
     }
     Err(eyre::eyre!("Failed to execute command"))
+}
+
+pub fn create_container<Cb>(callback: Cb) -> Result<Pid> 
+where
+    Cb: FnMut() -> isize,
+{
+    const STACK_SIZE: usize = 4 * 1024 * 1024; // == 4 MB
+    let ref mut stack: [u8; STACK_SIZE] = [0; STACK_SIZE];
+    let clone_flags = CloneFlags::CLONE_NEWNS | CloneFlags::CLONE_NEWUTS | CloneFlags::CLONE_NEWIPC | CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWNET;
+    let cb = Box::new(callback);
+    let pid = clone(cb, stack, clone_flags, Some(SIGCHLD))?;
+    Ok(pid)
 }

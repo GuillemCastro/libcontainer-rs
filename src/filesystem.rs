@@ -200,6 +200,13 @@ pub fn mount_procfs() -> Result<()> {
 
 pub fn mount_sysfs() -> Result<()> {
     Mount::new(
+        "tmpfs",
+        "/sys",
+        FilesystemType::from("tmpfs"),
+        MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
+        None
+    )?;
+    Mount::new(
         "sysfs",
         "/sys",
         FilesystemType::from("sysfs"),
