@@ -21,6 +21,8 @@
  * THE SOFTWARE.
  */
 
+use std::env;
+use std::io::Write;
 use std::path::Path;
 
 use crate::filesystem::StorageDriver;
@@ -29,8 +31,10 @@ use crate::ipc::Action;
 use crate::ipc::ConsumerChannel;
 use crate::syscall;
 use crate::filesystem;
+use crate::syscall::Command;
 
 use color_eyre::Result;
+use nix::unistd::sethostname;
 
 pub struct Runtime {
     // ID of the container
@@ -51,8 +55,8 @@ impl Runtime {
     /// * `consumer_channel` - Channel for receiving IPC messages
     pub fn new(id: String, fs: Box<dyn StorageDriver>, consumer_channel: ConsumerChannel) -> Runtime {
         Runtime {
-            ID: id,
-            hostname: "".to_string(),
+            ID: id.clone(),
+            hostname: id.chars().take(12).collect(),
             fs: fs,
             consumer_channel: consumer_channel
         }
@@ -69,6 +73,7 @@ impl Runtime {
         filesystem::mount_procfs()?;
         filesystem::mount_sysfs()?;
         filesystem::mount_devfs()?;
+        self.setup_hostname()?;
         self.event_loop()?;
         log::info!("Container thread stopped");
         Ok(())
@@ -92,6 +97,15 @@ impl Runtime {
     /// Get the mountpoint of the container's root filesystem in the host filesystem
     pub fn mount_point(&self) -> Result<&Path> {
         Ok(self.fs.root()?)
+    }
+
+    fn setup_hostname(&self) -> Result<()> {
+        // Syscall to set the hostname
+        sethostname(self.hostname.as_str())?;
+        // Write hostname to /etc/hostname
+        let mut hostname_file = std::fs::File::create("/etc/hostname")?;
+        hostname_file.write_all(self.hostname.as_bytes())?;
+        Ok(())
     }
 
 }
