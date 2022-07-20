@@ -21,13 +21,13 @@
  * THE SOFTWARE.
  */
 
-use std::ffi::CString;
+use std::ffi::{CString, CStr};
 use std::path::Path;
 use color_eyre::{Result, eyre};
 use nix::libc::SIGCHLD;
 use nix::mount::{MsFlags, MntFlags, mount, umount2};
 use nix::sched::{clone, CloneFlags};
-use nix::unistd::{pivot_root, chdir, fork, execvpe, ForkResult, Pid};
+use nix::unistd::{pivot_root, chdir, fork, execvpe, ForkResult, Pid, Uid, Gid};
 use serde::{Serialize, Deserialize};
 
 /// Switches the current rootfs to `new_root`
@@ -94,6 +94,7 @@ pub struct Command {
 /// 
 /// Note: when `exec_type` is `ExecType::REPLACE`, this function never returns, as the whole process is replaced.
 pub fn exec(command: Command) -> Result<i32> {
+    log::debug!("Executing command: {:?}", command);
     let filename: CString = CString::new(command.command).unwrap();
     let mut args: Vec<CString> = vec![filename.clone()];
     for arg in command.args {
@@ -133,4 +134,38 @@ where
     let cb = Box::new(callback);
     let pid = clone(cb, stack, clone_flags, Some(SIGCHLD))?;
     Ok(pid)
+}
+
+#[derive(Debug)]
+pub struct UserInfo {
+    pub name: String,
+    pub passwd: String,
+    pub uid: Uid,
+    pub gid: Gid,
+    pub gecos: String,
+    pub home: String,
+    pub shell: String
+}
+
+impl UserInfo {
+
+    pub fn from_name<S: Into<String>>(name: S) -> Result<UserInfo> {
+        let user_info = unsafe {
+            let n = CString::new(name.into()).unwrap();
+            nix::libc::getpwnam(n.as_ptr())
+        };
+        let passwd: UserInfo = unsafe {
+            UserInfo {
+                name: CStr::from_ptr((*user_info).pw_name).to_string_lossy().to_string(),
+                passwd: CStr::from_ptr((*user_info).pw_passwd).to_string_lossy().to_string(),
+                uid: Uid::from_raw((*user_info).pw_uid),
+                gid: Gid::from_raw((*user_info).pw_gid),
+                gecos: CStr::from_ptr((*user_info).pw_gecos).to_string_lossy().to_string(),
+                home: CStr::from_ptr((*user_info).pw_dir).to_string_lossy().to_string(),
+                shell: CStr::from_ptr((*user_info).pw_shell).to_string_lossy().to_string()
+            }
+        };
+        Ok(passwd)
+    }
+
 }

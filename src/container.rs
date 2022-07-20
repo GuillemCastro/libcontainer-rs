@@ -23,7 +23,7 @@
 
 use crate::filesystem::{StorageDriver, NullDriver};
 use crate::ipc::{self, Action, ProducerChannel};
-use crate::runtime::Runtime;
+use crate::runtime::{Runtime, RuntimeOptions};
 use crate::syscall::{self, Command, ExecType};
 use crate::random;
 use color_eyre::{Result, eyre};
@@ -55,7 +55,7 @@ impl Container {
     pub fn new(fs: Box<dyn StorageDriver>) -> Result<Self> {
         let (producer_channel, consumer_channel) = ipc::create_ipc_channels()?;
         let id = random::generate_random_128_id();
-        let runtime = Runtime::new(id, fs, consumer_channel);
+        let runtime = Runtime::new(id, fs, consumer_channel, RuntimeOptions::default());
         Ok(Container {
             producer_channel,
             pid: Pid::this(),
